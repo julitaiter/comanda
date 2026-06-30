@@ -1,5 +1,6 @@
 import "./styles.css";
 import { inject } from "@vercel/analytics";
+import { injectSpeedInsights } from "@vercel/speed-insights";
 import { loadState } from "./state.js";
 import { mountApp } from "./ui.js";
 
@@ -10,6 +11,7 @@ mountApp(state, nextState => {
 });
 
 inject();
+injectSpeedInsights();
 
 if ("serviceWorker" in navigator && location.protocol !== "file:") {
   window.addEventListener("load", () => {
