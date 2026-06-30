@@ -1,0 +1,24 @@
+{
+  "name": "comanda-grupal",
+  "version": "1.1.0",
+  "description": "Comanda: webapp local para organizar pedidos grupales multiproducto, calcular deudas y compartir por WhatsApp.",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 0.0.0.0 --port 5173",
+    "build": "vite build",
+    "preview": "vite preview --host 0.0.0.0 --port 5173"
+  },
+  "keywords": [
+    "comanda",
+    "pedido",
+    "grupal",
+    "cuentas",
+    "whatsapp",
+    "localstorage",
+    "pwa"
+  ],
+  "license": "MIT",
+  "devDependencies": {
+    "vite": "^5.4.0"
+  }
+}

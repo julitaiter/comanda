@@ -1,0 +1,17 @@
+{
+  "name": "Comanda",
+  "short_name": "Comanda",
+  "description": "Pedidos grupales sin cuentas raras.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#fff8ec",
+  "theme_color": "#e35d20",
+  "icons": [
+    {
+      "src": "/assets/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
