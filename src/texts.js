@@ -1,5 +1,6 @@
 import { calculateTotals, getTotalUnitsText } from "./totals.js";
 import { formatQuantity, money, pluralizeUnit } from "./normalize.js";
+import { getPaymentStatusLabel } from "./payments.js";
 
 export function adjustmentModeLabel(mode) {
   return mode === "equal" ? "partes iguales" : "proporcional";
@@ -43,8 +44,13 @@ export function generateDebtsText(state) {
     lines.push("- Sin personas cargadas");
   } else {
     totals.people.forEach(person => {
-      const paymentStatus = person.paid ? "PAGADO" : "PENDIENTE";
-      lines.push(`- ${person.name}: ${money(person.total)} - ${paymentStatus}`);
+      if (person.pending <= 0) {
+        lines.push(`- ${person.name}: pagado OK`);
+      } else if (person.covered > 0) {
+        lines.push(`- ${person.name}: debe ${money(person.pending)} (cubierto ${money(person.covered)} de ${money(person.total)})`);
+      } else {
+        lines.push(`- ${person.name}: debe ${money(person.pending)}`);
+      }
     });
   }
 
@@ -60,9 +66,18 @@ export function generateDebtsText(state) {
   }
 
   lines.push("");
-  lines.push(`Total pagado: ${money(totals.totalPaid)}`);
+  lines.push(`Total cobrado/aplicado: ${money(totals.totalPaid)}`);
   lines.push(`Total pendiente: ${money(totals.totalPending)}`);
+  if (totals.totalOverpaid > 0) lines.push(`Pagos de mas: ${money(totals.totalOverpaid)}`);
   lines.push(`Total general: ${money(totals.total)}`);
+
+  if (totals.internalDebts.length) {
+    lines.push("");
+    lines.push("Deudas entre personas:");
+    totals.internalDebts.forEach(debt => {
+      lines.push(`- ${debt.debtorName} le debe ${money(debt.amount)} a ${debt.creditorName}`);
+    });
+  }
 
   return lines.join("\n");
 }
@@ -89,7 +104,10 @@ export function generateFullSummaryText(state) {
         lines.push(`Ajuste ${adjustmentModeLabel(totals.adjustmentMode)}: ${person.adjustment >= 0 ? "+" : ""}${money(person.adjustment)}`);
       }
 
-      lines.push(`Total: ${money(person.total)} - ${person.paid ? "PAGADO" : "PENDIENTE"}`);
+      lines.push(`Cubierto: ${money(person.covered)}`);
+      lines.push(`Pendiente: ${money(person.pending)}`);
+      if (person.overpaid > 0) lines.push(`Pago de mas: ${money(person.overpaid)}`);
+      lines.push(`Estado: ${getPaymentStatusLabel(person.paymentStatus)}`);
     });
   }
 
@@ -105,8 +123,9 @@ export function generateFullSummaryText(state) {
   }
 
   lines.push("");
-  lines.push(`Total pagado: ${money(totals.totalPaid)}`);
+  lines.push(`Total cobrado/aplicado: ${money(totals.totalPaid)}`);
   lines.push(`Total pendiente: ${money(totals.totalPending)}`);
+  if (totals.totalOverpaid > 0) lines.push(`Pagos de mas: ${money(totals.totalOverpaid)}`);
   lines.push(`Total general: ${money(totals.total)}`);
 
   if (!state.closed) {

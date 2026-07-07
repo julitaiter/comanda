@@ -4,9 +4,11 @@ import { calculateTotals, getTotalUnitsText } from "./totals.js";
 import { generateDebtsText, generateFullSummaryText, generateStoreText, adjustmentModeLabel } from "./texts.js";
 import { copyText, el, showToast } from "./dom.js";
 import { exportState, importStateFromFile, resetState, saveState } from "./state.js";
+import { PAYMENT_METHODS, getPaymentStatusLabel, validatePayment } from "./payments.js";
 
 let state;
 let rerender;
+let activeTab = "order";
 
 export function mountApp(initialState, onStateChange) {
   state = initialState;
@@ -39,9 +41,15 @@ export function mountApp(initialState, onStateChange) {
         </div>
       </section>
 
-      <main class="layout">
+      <nav class="tabs" aria-label="Secciones principales">
+        <button class="tab-button" type="button" data-tab="order">Pedido</button>
+        <button class="tab-button" type="button" data-tab="summary">Resumen</button>
+        <button class="tab-button" type="button" data-tab="payments">Pagos</button>
+      </nav>
+
+      <main class="layout tabbed-layout">
         <div class="left-col">
-          <section class="panel">
+          <section class="panel" data-tab-section="order">
             <div class="panel-header">
               <div>
                 <h2>Configuración</h2>
@@ -88,7 +96,7 @@ export function mountApp(initialState, onStateChange) {
             </div>
           </section>
 
-          <section class="panel" id="loadPanel">
+          <section class="panel" id="loadPanel" data-tab-section="order">
             <div class="panel-header">
               <div>
                 <h2>Cargar persona</h2>
@@ -115,7 +123,7 @@ export function mountApp(initialState, onStateChange) {
         </div>
 
         <div>
-          <section class="panel">
+          <section class="panel" data-tab-section="summary">
             <div class="panel-header">
               <div>
                 <h2>Resumen</h2>
@@ -149,7 +157,25 @@ export function mountApp(initialState, onStateChange) {
             </div>
           </section>
 
-          <section class="panel">
+          <section class="panel" data-tab-section="payments">
+            <div class="panel-header">
+              <div>
+                <h2>Pagos</h2>
+                <div class="hint">Registrá quién pagó, cuánto pagó y a quién cubrió.</div>
+              </div>
+            </div>
+
+            <div id="paymentTotals" class="payment-totals"></div>
+            <div id="paymentForm" class="payment-form"></div>
+
+            <h3>Deudas entre personas</h3>
+            <div id="internalDebtsList" class="internal-debts-list"></div>
+
+            <h3>Pagos registrados</h3>
+            <div id="paymentsList" class="payments-list"></div>
+          </section>
+
+          <section class="panel" data-tab-section="summary">
             <div class="panel-header">
               <div>
                 <h2>Texto para compartir</h2>
@@ -226,6 +252,24 @@ function bindEvents() {
   document.querySelector("#importBtn").addEventListener("click", () => document.querySelector("#importFile").click());
   document.querySelector("#importFile").addEventListener("change", importFile);
   document.querySelector("#resetBtn").addEventListener("click", resetAll);
+
+  document.querySelectorAll(".tab-button").forEach(button => {
+    button.addEventListener("click", () => setActiveTab(button.dataset.tab));
+  });
+}
+
+function setActiveTab(tab) {
+  activeTab = ["order", "summary", "payments"].includes(tab) ? tab : "order";
+
+  document.querySelectorAll(".tab-button").forEach(button => {
+    const isActive = button.dataset.tab === activeTab;
+    button.classList.toggle("active", isActive);
+    button.setAttribute("aria-selected", isActive ? "true" : "false");
+  });
+
+  document.querySelectorAll("[data-tab-section]").forEach(section => {
+    section.classList.toggle("active-tab-section", section.dataset.tabSection === activeTab);
+  });
 }
 
 function saveConfig() {
@@ -433,6 +477,7 @@ function render() {
   renderDatalists();
   renderStoreSummary(totals);
   renderPeopleSummary(totals);
+  renderPaymentsSection(totals);
 
   const adjustmentText = totals.adjustmentTotal !== 0
     ? ` · Ajuste ${totals.adjustmentTotal >= 0 ? "+" : ""}${money(totals.adjustmentTotal)} (${adjustmentModeLabel(totals.adjustmentMode)})`
@@ -442,6 +487,243 @@ function render() {
     `${money(totals.total)}${adjustmentText} · Pendiente ${money(totals.totalPending)}`;
 
   document.querySelector("#shareText").value = generateFullSummaryText(state);
+  setActiveTab(activeTab);
+}
+
+function getPersonName(personId) {
+  return state.people.find(person => person.id === personId)?.name || "Sin nombre";
+}
+
+function formatDateTime(value) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+
+  return date.toLocaleString("es-AR", {
+    dateStyle: "short",
+    timeStyle: "short"
+  });
+}
+
+function readPaymentDraft() {
+  const allocations = [...document.querySelectorAll(".allocation-input")]
+    .map(input => ({
+      personId: input.dataset.personId,
+      amount: Number(input.value || 0)
+    }))
+    .filter(allocation => allocation.personId && allocation.amount > 0);
+
+  return {
+    id: crypto.randomUUID(),
+    payerId: document.querySelector("#paymentPayer")?.value || "",
+    amount: Number(document.querySelector("#paymentAmount")?.value || 0),
+    method: document.querySelector("#paymentMethod")?.value || PAYMENT_METHODS[0],
+    note: document.querySelector("#paymentNote")?.value.trim() || "",
+    date: new Date().toISOString(),
+    allocations
+  };
+}
+
+function updatePaymentAmountFromAllocations() {
+  const total = [...document.querySelectorAll(".allocation-input")]
+    .reduce((sum, input) => sum + Number(input.value || 0), 0);
+  const amountInput = document.querySelector("#paymentAmount");
+
+  if (amountInput) amountInput.value = total ? String(Math.round(total * 100) / 100) : "";
+}
+
+function autofillPayerPending(totals = calculateTotals(state)) {
+  const payerId = document.querySelector("#paymentPayer")?.value;
+  if (!payerId) return;
+
+  document.querySelectorAll(".allocation-input").forEach(input => {
+    input.value = "";
+  });
+
+  const payerTotal = totals.people.find(person => person.id === payerId);
+  const input = document.querySelector(`.allocation-input[data-person-id="${payerId}"]`);
+  const pending = Number(payerTotal?.pending || 0);
+
+  if (input && pending > 0) input.value = String(Math.round(pending * 100) / 100);
+  updatePaymentAmountFromAllocations();
+}
+
+function resetPaymentForm(totals = calculateTotals(state)) {
+  document.querySelectorAll(".allocation-input").forEach(input => {
+    input.value = "";
+  });
+
+  const payer = document.querySelector("#paymentPayer");
+  const amount = document.querySelector("#paymentAmount");
+  const method = document.querySelector("#paymentMethod");
+  const note = document.querySelector("#paymentNote");
+
+  if (payer) payer.value = state.people[0]?.id || "";
+  if (amount) amount.value = "";
+  if (method) method.value = PAYMENT_METHODS[0];
+  if (note) note.value = "";
+
+  autofillPayerPending(totals);
+}
+
+function fillAllocationPending(personId, pending) {
+  const input = document.querySelector(`.allocation-input[data-person-id="${personId}"]`);
+  if (!input) return;
+
+  const amount = Number(pending || 0);
+  input.value = amount > 0 ? String(Math.round(amount * 100) / 100) : "";
+  updatePaymentAmountFromAllocations();
+}
+
+function savePayment() {
+  const payment = readPaymentDraft();
+  const validation = validatePayment(payment);
+
+  if (!validation.valid) {
+    showToast(validation.message);
+    return;
+  }
+
+  state.payments = [...(state.payments || []), payment];
+  setState(state);
+  showToast("Pago registrado");
+}
+
+function removePayment(paymentId) {
+  state.payments = (state.payments || []).filter(payment => payment.id !== paymentId);
+  setState(state);
+  showToast("Pago eliminado");
+}
+
+function renderPaymentsSection(totals) {
+  const totalsBox = document.querySelector("#paymentTotals");
+  const form = document.querySelector("#paymentForm");
+  const list = document.querySelector("#paymentsList");
+  const internalDebtsList = document.querySelector("#internalDebtsList");
+
+  totalsBox.innerHTML = `
+    <div class="payment-total-card">
+      <span>Total comanda</span>
+      <strong>${money(totals.total)}</strong>
+    </div>
+    <div class="payment-total-card">
+      <span>Cobrado/aplicado</span>
+      <strong>${money(totals.totalPaid)}</strong>
+    </div>
+    <div class="payment-total-card">
+      <span>Pendiente</span>
+      <strong>${money(totals.totalPending)}</strong>
+    </div>
+    <div class="payment-total-card ${totals.totalOverpaid > 0 ? "has-overpay" : ""}">
+      <span>Pagos de mas</span>
+      <strong>${money(totals.totalOverpaid)}</strong>
+    </div>
+  `;
+
+  if (!state.people.length) {
+    form.innerHTML = `<div class="empty">Agregá personas para registrar pagos.</div>`;
+  } else {
+    form.innerHTML = `
+      <div class="form-grid">
+        <div class="field">
+          <label for="paymentPayer">Quién pagó</label>
+          <select id="paymentPayer">
+            ${state.people.map(person => `<option value="${person.id}">${person.name}</option>`).join("")}
+          </select>
+        </div>
+        <div class="field">
+          <label for="paymentAmount">Monto pagado</label>
+          <input id="paymentAmount" type="number" min="0" step="0.01" placeholder="0">
+        </div>
+        <div class="field">
+          <label for="paymentMethod">Medio</label>
+          <select id="paymentMethod">
+            ${PAYMENT_METHODS.map(method => `<option value="${method}">${method}</option>`).join("")}
+          </select>
+        </div>
+        <div class="field">
+          <label for="paymentNote">Nota</label>
+          <input id="paymentNote" type="text" placeholder="Opcional">
+        </div>
+      </div>
+
+      <h3>Aplicar pago a</h3>
+      <div class="allocations-list">
+        ${totals.people.map(person => `
+          <div class="allocation-row">
+            <div>
+              <strong>${person.name}</strong>
+              <span>Pendiente ${money(person.pending)}</span>
+            </div>
+            <input
+              class="allocation-input"
+              data-person-id="${person.id}"
+              type="number"
+              min="0"
+              step="0.01"
+              placeholder="0"
+            >
+            <button class="ghost use-pending" type="button" data-person-id="${person.id}" data-pending="${person.pending}">
+              Usar pendiente
+            </button>
+          </div>
+        `).join("")}
+      </div>
+
+      <div class="actions">
+        <button class="green" id="savePaymentBtn">Registrar pago</button>
+      </div>
+    `;
+
+    form.querySelector("#paymentPayer").addEventListener("change", () => autofillPayerPending(totals));
+    form.querySelectorAll(".allocation-input").forEach(input => {
+      input.addEventListener("input", updatePaymentAmountFromAllocations);
+    });
+    form.querySelectorAll(".use-pending").forEach(button => {
+      button.addEventListener("click", () => fillAllocationPending(button.dataset.personId, button.dataset.pending));
+    });
+    form.querySelector("#savePaymentBtn").addEventListener("click", savePayment);
+    resetPaymentForm(totals);
+  }
+
+  if (!totals.internalDebts.length) {
+    internalDebtsList.innerHTML = `<div class="empty">No hay deudas internas entre personas.</div>`;
+  } else {
+    internalDebtsList.innerHTML = totals.internalDebts.map(debt => `
+      <div class="internal-debt-row">
+        <span>${debt.debtorName} le debe <strong>${money(debt.amount)}</strong> a ${debt.creditorName}</span>
+      </div>
+    `).join("");
+  }
+
+  if (!(state.payments || []).length) {
+    list.innerHTML = `<div class="empty">Todavía no hay pagos registrados.</div>`;
+    return;
+  }
+
+  list.innerHTML = (state.payments || []).map(payment => {
+    const allocations = (payment.allocations || [])
+      .map(allocation => `<li><span>${getPersonName(allocation.personId)}</span><strong>${money(allocation.amount)}</strong></li>`)
+      .join("");
+    const note = payment.note ? `<div class="payment-note">${payment.note}</div>` : "";
+
+    return `
+      <div class="payment-card">
+        <div class="payment-card-head">
+          <div>
+            <div class="payment-title">${getPersonName(payment.payerId)} pagó ${money(payment.amount)}</div>
+            <div class="payment-meta">${payment.method || "Efectivo"} · ${formatDateTime(payment.date)}</div>
+          </div>
+          <button class="danger icon remove-payment" title="Eliminar pago" data-payment-id="${payment.id}">×</button>
+        </div>
+        <ul class="mini-list">${allocations}</ul>
+        ${note}
+      </div>
+    `;
+  }).join("");
+
+  list.querySelectorAll(".remove-payment").forEach(button => {
+    button.addEventListener("click", () => removePayment(button.dataset.paymentId));
+  });
 }
 
 function renderDatalists(productName = "") {
@@ -510,28 +792,42 @@ function renderPeopleSummary(totals) {
       </li>
     ` : "";
 
+    const overpaid = person.overpaid > 0 ? `
+      <li>
+        <span>Pago de mas</span>
+        <strong>${money(person.overpaid)}</strong>
+      </li>
+    ` : "";
+
+    const coveredBy = person.paidBy.length ? `
+      <div class="covered-by">
+        <strong>Cubierto por:</strong>
+        <ul>
+          ${person.paidBy.map(payment => `<li>${payment.payerName}: ${money(payment.amount)}</li>`).join("")}
+        </ul>
+      </div>
+    ` : "";
+
     card.innerHTML = `
       <div class="person-head">
         <div>
           <div class="person-name">${person.name}</div>
-          <div class="person-total">${money(person.total)}</div>
-          <div class="${person.paid ? "paid-badge" : "unpaid-badge"}">${person.paid ? "✓ Pagado" : "Pendiente"}</div>
+          <div class="person-total">Total: ${money(person.total)}</div>
+          <div class="payment-status-badge status-${person.paymentStatus}">${getPaymentStatusLabel(person.paymentStatus)}</div>
         </div>
         <div class="compact-actions">
-          <button class="${person.paid ? "ghost" : "green"} mark-paid">
-            ${person.paid ? "Marcar pendiente" : "Marcar pagado"}
-          </button>
           <button class="ghost icon remove-person" title="Eliminar persona">×</button>
         </div>
       </div>
-      <ul class="mini-list">${items}${adjustment}</ul>
+      <ul class="mini-list">
+        ${items}
+        ${adjustment}
+        <li><span>Cubierto</span><strong>${money(person.covered)}</strong></li>
+        <li><span>Pendiente</span><strong>${money(person.pending)}</strong></li>
+        ${overpaid}
+      </ul>
+      ${coveredBy}
     `;
-
-    card.querySelector(".mark-paid").addEventListener("click", () => {
-      state.people[index].paid = !state.people[index].paid;
-      setState(state);
-      showToast(state.people[index].paid ? "Marcado como pagado" : "Marcado como pendiente");
-    });
 
     card.querySelector(".remove-person").addEventListener("click", () => {
       if (state.closed) {

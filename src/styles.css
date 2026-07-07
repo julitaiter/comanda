@@ -244,6 +244,50 @@ h1 {
   align-items: start;
 }
 
+.tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin: 0 0 18px;
+  padding: 8px;
+  border-radius: 20px;
+  background: rgba(255, 255, 255, 0.56);
+  border: 1px solid rgba(255, 255, 255, 0.72);
+  box-shadow: var(--shadow-soft);
+  backdrop-filter: blur(18px);
+}
+
+.tab-button {
+  flex: 1 1 140px;
+  border-radius: 14px;
+  color: #5d3920;
+  background: transparent;
+  border: 1px solid transparent;
+  box-shadow: none;
+}
+
+.tab-button.active {
+  color: white;
+  background: linear-gradient(135deg, var(--primary), var(--primary-2));
+  box-shadow: 0 10px 22px rgba(227, 93, 32, 0.18);
+}
+
+.tabbed-layout {
+  display: block;
+}
+
+.tabbed-layout>div {
+  display: contents;
+}
+
+[data-tab-section] {
+  display: none;
+}
+
+[data-tab-section].active-tab-section {
+  display: block;
+}
+
 .panel {
   background: var(--card);
   border: 1px solid rgba(255, 255, 255, 0.72);
@@ -390,6 +434,51 @@ label {
   color: var(--danger);
 }
 
+.payment-status-badge {
+  display: inline-flex;
+  margin-top: 7px;
+  padding: 6px 9px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 950;
+}
+
+.status-paid {
+  background: rgba(20, 129, 61, 0.12);
+  color: var(--green);
+}
+
+.status-partial {
+  background: rgba(255, 159, 28, 0.17);
+  color: #9a5a00;
+}
+
+.status-pending {
+  background: rgba(180, 35, 24, 0.10);
+  color: var(--danger);
+}
+
+.status-overpaid {
+  background: rgba(37, 24, 15, 0.10);
+  color: #25180f;
+}
+
+.covered-by {
+  margin-top: 10px;
+  padding: 10px 12px;
+  border-radius: 14px;
+  background: rgba(20, 129, 61, 0.08);
+  color: #2f4d36;
+  font-size: 13px;
+}
+
+.covered-by ul {
+  display: grid;
+  gap: 4px;
+  margin: 6px 0 0;
+  padding-left: 18px;
+}
+
 .compact-actions {
   display: flex;
   flex-wrap: wrap;
@@ -443,6 +532,128 @@ label {
 .summary-box {
   display: grid;
   gap: 8px;
+}
+
+.payment-totals {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.payment-total-card {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+  padding: 12px;
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.64);
+  border: 1px solid rgba(94, 57, 30, 0.10);
+}
+
+.payment-total-card span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 850;
+}
+
+.payment-total-card strong {
+  font-size: 16px;
+  line-height: 1.1;
+}
+
+.payment-total-card.has-overpay {
+  background: rgba(255, 159, 28, 0.16);
+}
+
+.payment-form {
+  margin-top: 12px;
+}
+
+.allocations-list,
+.payments-list,
+.internal-debts-list {
+  display: grid;
+  gap: 10px;
+}
+
+.allocation-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 140px auto;
+  gap: 10px;
+  align-items: center;
+  padding: 12px;
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.58);
+  border: 1px solid rgba(94, 57, 30, 0.10);
+}
+
+.allocation-row strong,
+.allocation-row span {
+  display: block;
+}
+
+.allocation-row span {
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.allocation-input {
+  min-width: 0;
+}
+
+.payment-card {
+  display: grid;
+  gap: 10px;
+  padding: 14px;
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.70);
+  border: 1px solid rgba(94, 57, 30, 0.11);
+}
+
+.payment-card-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: flex-start;
+}
+
+.payment-title {
+  font-weight: 950;
+  letter-spacing: -0.02em;
+}
+
+.payment-meta,
+.payment-note {
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.35;
+}
+
+.payment-note {
+  padding: 9px 10px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.58);
+}
+
+.internal-debt-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 14px;
+  align-items: center;
+  padding: 12px;
+  border-radius: 16px;
+  background: rgba(37, 24, 15, 0.08);
+  border: 1px solid rgba(94, 57, 30, 0.10);
+}
+
+.internal-debt-row span {
+  color: #3e2d21;
+}
+
+.internal-debt-row strong {
+  white-space: nowrap;
 }
 
 .empty {
@@ -577,6 +788,16 @@ label {
   .form-grid,
   .item-row {
     grid-template-columns: 1fr;
+  }
+
+  .payment-totals,
+  .allocation-row,
+  .internal-debt-row {
+    grid-template-columns: 1fr;
+  }
+
+  .internal-debt-row {
+    display: grid;
   }
 
   .actions button {

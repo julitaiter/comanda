@@ -12,7 +12,28 @@ export function createInitialState() {
     catalog: {
       products: []
     },
-    people: []
+    people: [],
+    payments: []
+  };
+}
+
+export function normalizeState(rawState = {}) {
+  const initial = createInitialState();
+  const loaded = rawState || {};
+
+  return {
+    ...initial,
+    ...loaded,
+    adjustments: {
+      ...initial.adjustments,
+      ...(loaded.adjustments || {})
+    },
+    catalog: {
+      ...initial.catalog,
+      ...(loaded.catalog || {})
+    },
+    people: Array.isArray(loaded.people) ? loaded.people : [],
+    payments: Array.isArray(loaded.payments) ? loaded.payments : []
   };
 }
 
@@ -22,19 +43,7 @@ export function loadState() {
     if (!raw) return createInitialState();
 
     const loaded = JSON.parse(raw);
-    return {
-      ...createInitialState(),
-      ...loaded,
-      adjustments: {
-        ...createInitialState().adjustments,
-        ...(loaded.adjustments || {})
-      },
-      catalog: {
-        ...createInitialState().catalog,
-        ...(loaded.catalog || {})
-      },
-      people: loaded.people || []
-    };
+    return normalizeState(loaded);
   } catch {
     return createInitialState();
   }
@@ -74,13 +83,8 @@ export async function importStateFromFile(file) {
     throw new Error("El archivo no parece ser un pedido válido.");
   }
 
-  parsed.adjustments = {
-    surcharge: 0,
-    discount: 0,
-    mode: "proportional",
-    ...(parsed.adjustments || {})
-  };
+  const normalized = normalizeState(parsed);
 
-  saveState(parsed);
-  return parsed;
+  saveState(normalized);
+  return normalized;
 }
