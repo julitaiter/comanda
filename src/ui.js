@@ -440,7 +440,7 @@ function resetPersonForm() {
   editingPersonId = null;
   document.querySelector("#personName").value = "";
   document.querySelector("#itemsContainer").innerHTML = "";
-  addItemRow({ product: "Empanada", unit: "unidad", price: 1200 });
+  addItemRow();
   updatePersonFormMode();
 }
 
@@ -845,7 +845,7 @@ function renderDatalists(productName = "") {
     .map(product => `<option value="${product}">`)
     .join("");
 
-  const selectedProduct = productName || document.querySelector(".product-input")?.value || "Empanada";
+  const selectedProduct = productName || document.querySelector(".product-input")?.value || "";
 
   document.querySelector("#optionSuggestions").innerHTML = getOptionSuggestions(state, selectedProduct)
     .map(option => `<option value="${option}">`)

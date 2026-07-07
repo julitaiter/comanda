@@ -7,7 +7,7 @@ export function createInitialState() {
     adjustments: {
       surcharge: 0,
       discount: 0,
-      mode: "proportional"
+      mode: "equal"
     },
     catalog: {
       products: []
