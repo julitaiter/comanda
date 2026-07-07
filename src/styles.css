@@ -360,6 +360,27 @@ label {
   margin-bottom: 10px;
 }
 
+.editing-notice:empty {
+  display: none;
+}
+
+.editing-banner {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 14px;
+  padding: 12px;
+  border-radius: 16px;
+  background: rgba(255, 159, 28, 0.14);
+  border: 1px solid rgba(227, 93, 32, 0.18);
+  color: #4b2d15;
+  font-size: 14px;
+  line-height: 1.4;
+}
+
+.editing-payment-warning {
+  color: var(--muted);
+}
+
 .actions {
   display: flex;
   flex-wrap: wrap;

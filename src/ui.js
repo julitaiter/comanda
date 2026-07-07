@@ -9,6 +9,7 @@ import { PAYMENT_METHODS, getPaymentStatusLabel, validatePayment } from "./payme
 let state;
 let rerender;
 let activeTab = "order";
+let editingPersonId = null;
 
 export function mountApp(initialState, onStateChange) {
   state = initialState;
@@ -99,10 +100,12 @@ export function mountApp(initialState, onStateChange) {
           <section class="panel" id="loadPanel" data-tab-section="order">
             <div class="panel-header">
               <div>
-                <h2>Cargar persona</h2>
+                <h2 id="personFormTitle">Cargar persona</h2>
                 <div class="hint">Cada renglón puede ser un producto distinto: empanadas, pizza, bebida, sanguches, etc.</div>
               </div>
             </div>
+
+            <div id="editingNotice" class="editing-notice"></div>
 
             <div class="field">
               <label for="personName">Nombre</label>
@@ -118,7 +121,18 @@ export function mountApp(initialState, onStateChange) {
             <div class="actions">
               <button class="ghost" id="addItemBtn">+ Agregar producto</button>
               <button id="savePersonBtn">Guardar persona</button>
+              <button class="ghost" id="cancelEditBtn" type="button">Cancelar edicion</button>
             </div>
+          </section>
+
+          <section class="panel" data-tab-section="order">
+            <div class="panel-header">
+              <div>
+                <h2>Personas cargadas</h2>
+                <div class="hint">Edita o elimina pedidos ya cargados.</div>
+              </div>
+            </div>
+            <div id="orderPeopleList" class="people-list"></div>
           </section>
         </div>
 
@@ -238,6 +252,7 @@ function bindEvents() {
 
   document.querySelector("#addItemBtn").addEventListener("click", () => addItemRow());
   document.querySelector("#savePersonBtn").addEventListener("click", savePerson);
+  document.querySelector("#cancelEditBtn").addEventListener("click", cancelPersonEdit);
 
   document.querySelector("#closeBtn").addEventListener("click", closeOrder);
   document.querySelector("#reopenBtn").addEventListener("click", reopenOrder);
@@ -386,6 +401,29 @@ function savePerson() {
 
   items.forEach(item => registerItemInCatalog(state, item));
 
+  if (editingPersonId) {
+    const index = state.people.findIndex(person => person.id === editingPersonId);
+
+    if (index === -1) {
+      editingPersonId = null;
+      resetPersonForm();
+      showToast("No se encontro la persona a editar");
+      return;
+    }
+
+    state.people[index] = {
+      ...state.people[index],
+      name,
+      items
+    };
+
+    editingPersonId = null;
+    setState(state);
+    resetPersonForm();
+    showToast("Pedido actualizado");
+    return;
+  }
+
   state.people.push({
     id: crypto.randomUUID(),
     name,
@@ -399,9 +437,83 @@ function savePerson() {
 }
 
 function resetPersonForm() {
+  editingPersonId = null;
   document.querySelector("#personName").value = "";
   document.querySelector("#itemsContainer").innerHTML = "";
   addItemRow({ product: "Empanada", unit: "unidad", price: 1200 });
+  updatePersonFormMode();
+}
+
+function hasPaymentsForPerson(personId) {
+  return (state.payments || []).some(payment =>
+    payment.payerId === personId || (payment.allocations || []).some(allocation => allocation.personId === personId)
+  );
+}
+
+function getRelatedPaymentsNotice(personId) {
+  if (!hasPaymentsForPerson(personId)) return "";
+
+  return `
+    <div class="editing-payment-warning">
+      Esta persona tiene pagos registrados o aplicados. Si cambias el pedido, se recalcularan pendientes y saldos, pero los pagos registrados no se modificaran.
+    </div>
+  `;
+}
+
+function updatePersonFormMode() {
+  const person = editingPersonId
+    ? state.people.find(candidate => candidate.id === editingPersonId)
+    : null;
+  const title = document.querySelector("#personFormTitle");
+  const notice = document.querySelector("#editingNotice");
+  const saveButton = document.querySelector("#savePersonBtn");
+  const cancelButton = document.querySelector("#cancelEditBtn");
+
+  if (!title || !notice || !saveButton || !cancelButton) return;
+
+  if (!person) {
+    title.textContent = "Cargar persona";
+    notice.innerHTML = "";
+    saveButton.textContent = "Guardar persona";
+    cancelButton.hidden = true;
+    return;
+  }
+
+  title.textContent = "Editar pedido";
+  notice.innerHTML = `
+    <div class="editing-banner">
+      <strong>Editando pedido de ${person.name}</strong>
+      ${getRelatedPaymentsNotice(person.id)}
+    </div>
+  `;
+  saveButton.textContent = "Guardar cambios";
+  cancelButton.hidden = false;
+}
+
+function cancelPersonEdit() {
+  resetPersonForm();
+  showToast("Edicion cancelada");
+}
+
+function startPersonEdit(personId) {
+  if (state.closed) {
+    showToast("Reabri el pedido para editar personas");
+    return;
+  }
+
+  const person = state.people.find(candidate => candidate.id === personId);
+  if (!person) {
+    showToast("No se encontro la persona");
+    return;
+  }
+
+  editingPersonId = person.id;
+  setActiveTab("order");
+  document.querySelector("#personName").value = person.name || "";
+  document.querySelector("#itemsContainer").innerHTML = "";
+  (person.items || []).forEach(item => addItemRow(item));
+  if (!document.querySelector("#itemsContainer").children.length) addItemRow();
+  updatePersonFormMode();
 }
 
 function closeOrder() {
@@ -475,9 +587,11 @@ function render() {
   document.querySelector("#reopenBtn").disabled = !state.closed;
 
   renderDatalists();
+  renderOrderPeopleList(totals);
   renderStoreSummary(totals);
   renderPeopleSummary(totals);
   renderPaymentsSection(totals);
+  updatePersonFormMode();
 
   const adjustmentText = totals.adjustmentTotal !== 0
     ? ` · Ajuste ${totals.adjustmentTotal >= 0 ? "+" : ""}${money(totals.adjustmentTotal)} (${adjustmentModeLabel(totals.adjustmentMode)})`
@@ -742,6 +856,80 @@ function renderDatalists(productName = "") {
     .join("");
 }
 
+function cleanupPaymentsForRemovedPerson(personId) {
+  state.payments = (state.payments || [])
+    .filter(payment => payment.payerId !== personId)
+    .map(payment => {
+      const allocations = (payment.allocations || [])
+        .filter(allocation => allocation.personId !== personId);
+      const amount = allocations.reduce((sum, allocation) => sum + Number(allocation.amount || 0), 0);
+
+      return {
+        ...payment,
+        amount,
+        allocations
+      };
+    })
+    .filter(payment => payment.allocations.length && Number(payment.amount || 0) > 0);
+}
+
+function removePerson(personId) {
+  if (state.closed) {
+    showToast("Reabri el pedido para eliminar personas");
+    return;
+  }
+
+  const person = state.people.find(candidate => candidate.id === personId);
+  if (!person) return;
+
+  if (hasPaymentsForPerson(personId)) {
+    const ok = confirm("Esta persona tiene pagos registrados o pagos aplicados. Si la eliminas, tambien se eliminaran o afectaran esos registros. Queres continuar?");
+    if (!ok) return;
+    cleanupPaymentsForRemovedPerson(personId);
+  }
+
+  state.people = state.people.filter(candidate => candidate.id !== personId);
+  if (editingPersonId === personId) editingPersonId = null;
+  setState(state);
+  resetPersonForm();
+  showToast("Persona eliminada");
+}
+
+function renderOrderPeopleList(totals) {
+  const box = document.querySelector("#orderPeopleList");
+  if (!box) return;
+
+  box.innerHTML = "";
+
+  if (!totals.people.length) {
+    box.innerHTML = `<div class="empty">Todavia no hay personas cargadas.</div>`;
+    return;
+  }
+
+  totals.people.forEach(person => {
+    const card = el("div", { class: "person-card order-person-card" });
+    const itemCount = (person.items || []).length;
+
+    card.innerHTML = `
+      <div class="person-head">
+        <div>
+          <div class="person-name">${person.name}</div>
+          <div class="person-total">${itemCount === 1 ? "1 item" : `${itemCount} items`} · Total: ${money(person.total)}</div>
+          <div class="payment-status-badge status-${person.paymentStatus}">${getPaymentStatusLabel(person.paymentStatus)}</div>
+        </div>
+        <div class="compact-actions">
+          <button class="ghost edit-person" type="button">Editar</button>
+          <button class="ghost icon remove-person" type="button" title="Eliminar persona">×</button>
+        </div>
+      </div>
+    `;
+
+    card.querySelector(".edit-person").addEventListener("click", () => startPersonEdit(person.id));
+    card.querySelector(".remove-person").addEventListener("click", () => removePerson(person.id));
+    box.appendChild(card);
+  });
+}
+
 function renderStoreSummary(totals) {
   const box = document.querySelector("#storeSummary");
   box.innerHTML = "";
@@ -816,6 +1004,7 @@ function renderPeopleSummary(totals) {
           <div class="payment-status-badge status-${person.paymentStatus}">${getPaymentStatusLabel(person.paymentStatus)}</div>
         </div>
         <div class="compact-actions">
+          <button class="ghost edit-person" type="button">Editar</button>
           <button class="ghost icon remove-person" title="Eliminar persona">×</button>
         </div>
       </div>
@@ -829,15 +1018,14 @@ function renderPeopleSummary(totals) {
       ${coveredBy}
     `;
 
+    card.querySelector(".edit-person").addEventListener("click", () => startPersonEdit(person.id));
     card.querySelector(".remove-person").addEventListener("click", () => {
       if (state.closed) {
         showToast("Reabrí el pedido para eliminar personas");
         return;
       }
 
-      state.people.splice(index, 1);
-      setState(state);
-      showToast("Persona eliminada");
+      removePerson(person.id);
     });
 
     box.appendChild(card);
