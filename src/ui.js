@@ -3,17 +3,24 @@ import { normalizeOption, normalizeProduct, money, pluralizeUnit, formatQuantity
 import { calculateTotals, getTotalUnitsText } from "./totals.js";
 import { generateDebtsText, generateFullSummaryText, generateStoreText, adjustmentModeLabel } from "./texts.js";
 import { copyText, el, showToast } from "./dom.js";
-import { exportState, importStateFromFile, resetState, saveState } from "./state.js";
+import { exportState, importStateFromFile, resetState } from "./state.js";
+import { getAdminShareUrl, getPublicShareUrl } from "./collaboration.js";
 import { PAYMENT_METHODS, getPaymentStatusLabel, validatePayment } from "./payments.js";
 
 let state;
 let rerender;
 let activeTab = "order";
 let editingPersonId = null;
+let appOptions = { mode: "local" };
+let saving = false;
+let pendingSaves = 0;
+let saveQueue = Promise.resolve();
+let saveVersion = 0;
 
-export function mountApp(initialState, onStateChange) {
+export function mountApp(initialState, onStateChange, options = {}) {
   state = initialState;
   rerender = onStateChange;
+  appOptions = { mode: "local", ...options };
 
   document.querySelector("#app").innerHTML = `
     <div class="app">
@@ -41,6 +48,8 @@ export function mountApp(initialState, onStateChange) {
           </div>
         </div>
       </section>
+
+      <section id="collaborationPanel" class="collaboration-panel"></section>
 
       <nav class="tabs" aria-label="Secciones principales">
         <button class="tab-button" type="button" data-tab="order">Pedido</button>
@@ -92,7 +101,7 @@ export function mountApp(initialState, onStateChange) {
               <button class="danger" id="resetBtn">Resetear todo</button>
             </div>
 
-            <div class="footer-note">
+            <div class="footer-note" id="storageNote">
               Datos locales: se guardan con <strong>localStorage</strong>. Para mover el pedido a otra máquina usá exportar/importar JSON.
             </div>
           </section>
@@ -236,11 +245,50 @@ export function mountApp(initialState, onStateChange) {
   render();
 }
 
-function setState(nextState) {
-  state = nextState;
-  saveState(state);
-  rerender(state);
+async function setState(nextState) {
+  const requestedState = structuredClone(nextState);
+  const version = ++saveVersion;
+  state = requestedState;
   render();
+  pendingSaves += 1;
+  saving = true;
+  renderSavingStatus();
+
+  saveQueue = saveQueue
+    .catch(() => {})
+    .then(() => rerender(requestedState))
+    .then(savedState => {
+      if (version === saveVersion) {
+        state = savedState || requestedState;
+        render();
+      }
+    })
+    .catch(error => {
+      showToast(error.message || "No pudimos guardar los cambios.");
+    })
+    .finally(() => {
+      pendingSaves -= 1;
+      saving = pendingSaves > 0;
+      renderSavingStatus();
+    });
+
+  return saveQueue;
+}
+
+function isShared() {
+  return appOptions.mode === "shared";
+}
+
+function canManage() {
+  return !isShared() || appOptions.isAdmin;
+}
+
+function canEditPerson(personId) {
+  return !isShared() || appOptions.isAdmin || appOptions.ownsPerson?.(personId);
+}
+
+function editingBlocked() {
+  return appOptions.expired || state.closed;
 }
 
 function bindEvents() {
@@ -288,6 +336,11 @@ function setActiveTab(tab) {
 }
 
 function saveConfig() {
+  if (!canManage() || appOptions.expired) {
+    showToast("Solo un organizador puede cambiar la configuración");
+    return;
+  }
+
   state.name = document.querySelector("#orderName").value.trim() || "Comanda";
   state.adjustments = {
     surcharge: Math.max(0, Number(document.querySelector("#surcharge").value || 0)),
@@ -380,7 +433,7 @@ function readCurrentItems() {
 }
 
 function savePerson() {
-  if (state.closed) {
+  if (editingBlocked()) {
     showToast("La comanda está cerrada. Reabrila para editar.");
     return;
   }
@@ -402,6 +455,11 @@ function savePerson() {
   items.forEach(item => registerItemInCatalog(state, item));
 
   if (editingPersonId) {
+    if (!canEditPerson(editingPersonId)) {
+      showToast("Solo puedes editar pedidos creados desde este navegador");
+      return;
+    }
+
     const index = state.people.findIndex(person => person.id === editingPersonId);
 
     if (index === -1) {
@@ -424,13 +482,15 @@ function savePerson() {
     return;
   }
 
+  const personId = crypto.randomUUID();
   state.people.push({
-    id: crypto.randomUUID(),
+    id: personId,
     name,
     paid: false,
     items
   });
 
+  if (isShared() && !appOptions.isAdmin) appOptions.addOwnedPerson?.(personId);
   setState(state);
   resetPersonForm();
   showToast("Persona agregada");
@@ -496,8 +556,13 @@ function cancelPersonEdit() {
 }
 
 function startPersonEdit(personId) {
-  if (state.closed) {
+  if (editingBlocked()) {
     showToast("Reabri el pedido para editar personas");
+    return;
+  }
+
+  if (!canEditPerson(personId)) {
+    showToast("Solo puedes editar pedidos creados desde este navegador");
     return;
   }
 
@@ -517,6 +582,11 @@ function startPersonEdit(personId) {
 }
 
 function closeOrder() {
+  if (!canManage() || appOptions.expired) {
+    showToast("Solo un organizador puede cerrar la comanda");
+    return;
+  }
+
   if (!state.people.length) {
     showToast("No hay pedidos cargados");
     return;
@@ -528,12 +598,22 @@ function closeOrder() {
 }
 
 function reopenOrder() {
+  if (!canManage() || appOptions.expired) {
+    showToast("Solo un organizador puede reabrir la comanda");
+    return;
+  }
+
   state.closed = false;
   setState(state);
   showToast("Comanda reabierta");
 }
 
 function resetAll() {
+  if (isShared()) {
+    showToast("El reseteo completo solo está disponible en modo local");
+    return;
+  }
+
   const ok = confirm("Esto borra la comanda cargada en este navegador. Continuar?");
   if (!ok) return;
 
@@ -543,6 +623,11 @@ function resetAll() {
 }
 
 async function importFile(event) {
+  if (!canManage() || isShared()) {
+    showToast("La importación solo está disponible en modo local");
+    return;
+  }
+
   const file = event.target.files?.[0];
   if (!file) return;
 
@@ -564,7 +649,13 @@ function shareWhatsApp() {
 }
 
 function render() {
+  if (isShared() && appOptions.expiresAt && new Date(appOptions.expiresAt).getTime() <= Date.now()) {
+    appOptions.expired = true;
+  }
+
   const totals = calculateTotals(state);
+
+  renderCollaborationPanel();
 
   document.querySelector("#orderName").value = state.name || "Comanda";
   document.querySelector("#surcharge").value = state.adjustments?.surcharge || 0;
@@ -573,18 +664,28 @@ function render() {
 
   document.querySelector("#heroTotal").textContent = money(totals.total);
   document.querySelector("#heroQuantity").textContent = getTotalUnitsText(totals);
-  document.querySelector("#heroStatus").textContent = state.closed ? "Cerrado" : "Abierto";
+  const visibleStatus = appOptions.expired ? "Expirada" : state.closed ? "Cerrado" : "Abierto";
+  document.querySelector("#heroStatus").textContent = visibleStatus;
   document.querySelector("#heroPeople").textContent = state.people.length === 1
     ? "1 persona cargada"
     : `${state.people.length} personas cargadas`;
 
   const pill = document.querySelector("#statusPill");
-  pill.textContent = state.closed ? "Cerrado" : "Abierto";
-  pill.className = state.closed ? "status closed" : "status";
+  pill.textContent = visibleStatus;
+  pill.className = state.closed || appOptions.expired ? "status closed" : "status";
 
-  document.querySelector("#loadPanel").classList.toggle("readonly-overlay", state.closed);
-  document.querySelector("#closeBtn").disabled = state.closed || !state.people.length;
-  document.querySelector("#reopenBtn").disabled = !state.closed;
+  document.querySelector("#loadPanel").classList.toggle("readonly-overlay", editingBlocked());
+  document.querySelector("#closeBtn").disabled = !canManage() || appOptions.expired || state.closed || !state.people.length;
+  document.querySelector("#reopenBtn").disabled = !canManage() || appOptions.expired || !state.closed;
+
+  ["orderName", "surcharge", "discount", "adjustmentMode", "saveConfigBtn"].forEach(id => {
+    document.querySelector(`#${id}`).disabled = !canManage() || appOptions.expired;
+  });
+  document.querySelector("#resetBtn").hidden = isShared();
+  document.querySelector("#importBtn").hidden = isShared();
+  document.querySelector("#storageNote").innerHTML = isShared()
+    ? "Fuente de verdad: <strong>Neon Postgres</strong>, siempre a través de la API de Comanda."
+    : "Datos locales: se guardan con <strong>localStorage</strong> en este navegador.";
 
   renderDatalists();
   renderOrderPeopleList(totals);
@@ -602,6 +703,64 @@ function render() {
 
   document.querySelector("#shareText").value = generateFullSummaryText(state);
   setActiveTab(activeTab);
+}
+
+function renderSavingStatus() {
+  const element = document.querySelector("#syncStatus");
+  if (element) element.textContent = saving ? "Guardando…" : "Sincronizado";
+}
+
+function renderCollaborationPanel() {
+  const panel = document.querySelector("#collaborationPanel");
+  if (!panel) return;
+
+  if (!isShared()) {
+    panel.innerHTML = `
+      <div><span class="mode-badge local">Modo local</span><strong>Guardado en este navegador</strong></div>
+      <button class="ghost" id="backHomeBtn" type="button">Volver al inicio</button>`;
+    panel.querySelector("#backHomeBtn").addEventListener("click", () => window.location.assign("/"));
+    return;
+  }
+
+  const publicUrl = getPublicShareUrl(appOptions.code);
+  const adminUrl = appOptions.adminToken ? getAdminShareUrl(appOptions.code, appOptions.adminToken) : "";
+  const expires = formatDateTime(appOptions.expiresAt);
+  panel.classList.toggle("expired", Boolean(appOptions.expired));
+  panel.innerHTML = `
+    <div class="collaboration-info">
+      <span class="mode-badge shared">Comanda compartida</span>
+      <strong>${appOptions.code}</strong>
+      <span>${appOptions.expired ? "Esta comanda ya expiró." : `Expira: ${expires}`}</span>
+      <span class="role-badge">${appOptions.isAdmin ? "Organizador" : "Participante"}</span>
+      <small id="syncStatus">${saving ? "Guardando…" : "Sincronizado"}</small>
+    </div>
+    <div class="compact-actions">
+      <button class="ghost" id="copyPublicBtn" type="button">Copiar link</button>
+      ${appOptions.isAdmin ? `<button class="ghost" id="copyAdminBtn" type="button">Copiar link admin</button>` : ""}
+      <button class="ghost" id="refreshSharedBtn" type="button" ${saving ? "disabled" : ""}>Actualizar</button>
+    </div>
+    ${appOptions.isAdmin ? `<p class="share-warning">Cualquier persona con el link puede acceder. No compartas el link admin salvo con organizadores.</p>` : ""}
+    ${!appOptions.isAdmin ? `<p class="permission-note">Puedes agregar pedidos y editar solo los creados desde este navegador.</p>` : ""}
+  `;
+
+  panel.querySelector("#copyPublicBtn").addEventListener("click", () => {
+    copyText(`Sumá tu pedido en Comanda:\n${publicUrl}`, "Link público copiado");
+  });
+  panel.querySelector("#copyAdminBtn")?.addEventListener("click", () => copyText(adminUrl, "Link admin copiado"));
+  panel.querySelector("#refreshSharedBtn").addEventListener("click", async event => {
+    const button = event.currentTarget;
+    button.disabled = true;
+    try {
+      const refreshed = await appOptions.onRefresh();
+      state = refreshed;
+      render();
+      showToast("Comanda actualizada");
+    } catch (error) {
+      showToast(error.message || "No pudimos cargar la comanda compartida.");
+    } finally {
+      button.disabled = false;
+    }
+  });
 }
 
 function getPersonName(personId) {
@@ -689,6 +848,11 @@ function fillAllocationPending(personId, pending) {
 }
 
 function savePayment() {
+  if (!canManage() || appOptions.expired) {
+    showToast("Solo un organizador puede registrar pagos");
+    return;
+  }
+
   const payment = readPaymentDraft();
   const validation = validatePayment(payment);
 
@@ -703,6 +867,11 @@ function savePayment() {
 }
 
 function removePayment(paymentId) {
+  if (!canManage() || appOptions.expired) {
+    showToast("Solo un organizador puede eliminar pagos");
+    return;
+  }
+
   state.payments = (state.payments || []).filter(payment => payment.id !== paymentId);
   setState(state);
   showToast("Pago eliminado");
@@ -733,7 +902,11 @@ function renderPaymentsSection(totals) {
     </div>
   `;
 
-  if (!state.people.length) {
+  if (appOptions.expired) {
+    form.innerHTML = `<div class="empty">Esta comanda ya expiró. Los pagos quedan disponibles solo para consulta.</div>`;
+  } else if (!canManage()) {
+    form.innerHTML = `<div class="empty">Solo el organizador puede registrar o editar pagos. Puedes consultar aquí el estado de la comanda.</div>`;
+  } else if (!state.people.length) {
     form.innerHTML = `<div class="empty">Agregá personas para registrar pagos.</div>`;
   } else {
     form.innerHTML = `
@@ -836,6 +1009,10 @@ function renderPaymentsSection(totals) {
   }).join("");
 
   list.querySelectorAll(".remove-payment").forEach(button => {
+    if (!canManage() || appOptions.expired) {
+      button.remove();
+      return;
+    }
     button.addEventListener("click", () => removePayment(button.dataset.paymentId));
   });
 }
@@ -874,8 +1051,13 @@ function cleanupPaymentsForRemovedPerson(personId) {
 }
 
 function removePerson(personId) {
-  if (state.closed) {
+  if (editingBlocked()) {
     showToast("Reabri el pedido para eliminar personas");
+    return;
+  }
+
+  if (!canEditPerson(personId)) {
+    showToast("Solo puedes eliminar pedidos creados desde este navegador");
     return;
   }
 
@@ -924,8 +1106,13 @@ function renderOrderPeopleList(totals) {
       </div>
     `;
 
-    card.querySelector(".edit-person").addEventListener("click", () => startPersonEdit(person.id));
-    card.querySelector(".remove-person").addEventListener("click", () => removePerson(person.id));
+    if (!canEditPerson(person.id) || editingBlocked()) {
+      card.querySelector(".edit-person")?.remove();
+      card.querySelector(".remove-person")?.remove();
+    }
+
+    card.querySelector(".edit-person")?.addEventListener("click", () => startPersonEdit(person.id));
+    card.querySelector(".remove-person")?.addEventListener("click", () => removePerson(person.id));
     box.appendChild(card);
   });
 }
@@ -1018,8 +1205,13 @@ function renderPeopleSummary(totals) {
       ${coveredBy}
     `;
 
-    card.querySelector(".edit-person").addEventListener("click", () => startPersonEdit(person.id));
-    card.querySelector(".remove-person").addEventListener("click", () => {
+    if (!canEditPerson(person.id) || editingBlocked()) {
+      card.querySelector(".edit-person")?.remove();
+      card.querySelector(".remove-person")?.remove();
+    }
+
+    card.querySelector(".edit-person")?.addEventListener("click", () => startPersonEdit(person.id));
+    card.querySelector(".remove-person")?.addEventListener("click", () => {
       if (state.closed) {
         showToast("Reabrí el pedido para eliminar personas");
         return;

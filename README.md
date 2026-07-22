@@ -1,5 +1,39 @@
 # Comanda
 
+## Modos local y compartido
+
+Comanda puede usarse en dos modos:
+
+- **Local:** no necesita backend y guarda todo en `localStorage`.
+- **Compartido:** crea una comanda temporal en Neon Postgres y permite cargar pedidos desde un link, sin login.
+
+### Configurar Neon y Vercel
+
+1. Crea un proyecto y una base de datos en [Neon](https://neon.tech/).
+2. Ejecuta [`docs/neon.sql`](docs/neon.sql) en el SQL Editor de Neon.
+3. Copia `.env.example` como `.env` para desarrollo y define `DATABASE_URL` con la cadena de conexión de Neon.
+4. En Vercel, abre **Project Settings → Environment Variables**, agrega `DATABASE_URL` para los entornos necesarios y vuelve a desplegar.
+
+`DATABASE_URL` es una variable exclusiva del servidor: no debe llevar el prefijo `VITE_`, no se importa desde `src/` y nunca se expone al navegador. Todas las lecturas y escrituras compartidas pasan por `/api/comandas`.
+
+```bash
+npm install
+npm run dev
+```
+
+Las funciones dentro de `api/` se ejecutan al desplegar en Vercel. Para probar también esas funciones en local puede usarse Vercel CLI (`vercel dev`) con `DATABASE_URL` configurada.
+
+### Links, permisos y seguridad del MVP
+
+- El link público usa `/g/CODIGO`; cualquiera que lo tenga puede ver la comanda y agregar un pedido.
+- El link admin agrega `?admin=TOKEN`; quien lo tenga puede configurar, cerrar/reabrir, administrar personas y registrar pagos.
+- Sin login, el navegador recuerda en `comanda:CODIGO:ownedPeopleIds` qué pedidos creó un participante y solo muestra edición para esos pedidos.
+- No cargues datos sensibles. Las comandas expiran en el plazo elegido, aunque esta versión no las elimina automáticamente.
+- La sincronización es manual mediante **Actualizar**. Como el estado completo se guarda en JSONB, una actualización concurrente devuelve un conflicto y pide recargar antes de guardar.
+- La propiedad de pedidos es una protección básica de MVP basada en almacenamiento local; no reemplaza autenticación ni autorización por usuario.
+
+El SQL crea una única tabla `comandas`, con el estado compatible con el modo local dentro de una columna `jsonb`. Los endpoints disponibles son `POST`, `GET` y `PUT /api/comandas`.
+
 **Pedimos juntos, pagamos claro.**
 
 Comanda es una webapp local para organizar pedidos grupales sin hacer cuentas a mano. Sirve para juntadas, oficina, reuniones, partidos, cooperativas chicas o cualquier situación donde una persona centraliza un pedido y después tiene que dividir lo que paga cada uno.
